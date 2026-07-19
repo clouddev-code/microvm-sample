@@ -1,0 +1,24 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# CDK
+cdk.out/
+cdk.context.json
+*.d.ts
+*.js
+!jest.config.js
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Env / secrets
+.env
+.env.*
+*.pem
+
+# OS
+.DS_Store
