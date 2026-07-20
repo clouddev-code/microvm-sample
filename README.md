@@ -40,10 +40,13 @@ AWS Lambda MicroVMsは非常に新しい機能のため、以下はドキュメ�
    `/run`・`/resume`フック発火後にのみ`init_clients()`で生成する構成にしています。
    他の言語・SDKで実装する場合も同様に、認証情報をキャッシュするSDKオブジェクト全般を
    遅延生成にしてください。
-4. **MicroVMの最大稼働時間は8時間**です。超過すると自動サスペンドではなく強制終了されます。
-   本プロトタイプには8時間ごとの自動再起動の仕組みは含まれていません（スコープ外）。
-   常時稼働のワーカーとして運用する場合は、EventBridge Scheduler等で定期的に
-   `RunMicrovm`/`ResumeMicrovm`を呼び直す仕組みを別途追加してください。
+4. **MicroVMの最大稼働時間は8時間**です。超過すると`stateReason: "MicroVM exceeded maximum lifetime."`
+   として強制終了されます。**この8時間タイマーはRUNNING/SUSPENDEDいずれの状態でも`startedAt`起点で
+   進み続け、SUSPENDED中でも容赦なく強制terminateされることを実機確認済みです**（サスペンドによる
+   一時停止という救済措置は無い。検証内容は`research/ai-lambda-microvms-suspend-resume-lifecycle.md`
+   「実機検証（2026-07-20）」節参照）。本プロトタイプには8時間ごとの自動再起動の仕組みは
+   含まれていません（スコープ外）。常時稼働のワーカーとして運用する場合は、EventBridge Scheduler等で
+   定期的に`RunMicrovm`/`ResumeMicrovm`を呼び直す仕組みを別途追加してください。
 5. **アイドル自動サスペンド**はMicroVMのインバウンドHTTPエンドポイントへのトラフィックのみで
    判定され、SQSへの能動的ポーリングはカウントされません。意図しないサスペンドを避けるため、
    `run-microvm`実行時の`idle-policy`は`maxIdleDurationSeconds`を十分に長い値

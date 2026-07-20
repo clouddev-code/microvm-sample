@@ -109,8 +109,42 @@ Developer Guide「AWS Lambda MicroVMs core concepts」に状態一覧・状態�
 | SUSPENDING | SUSPENDED | `/suspend`フック完了、メモリ・ディスク状態のチェックポイント完了 |
 | SUSPENDED | RUNNING | トラフィック到達（`autoResumeEnabled=true`の場合）、または明示的な`resume-microvm`API呼び出し |
 | RUNNING | TERMINATING | 明示的な`terminate-microvm`API呼び出し、または`maximumDurationInSeconds`超過 |
-| SUSPENDED | TERMINATING | `suspendedDurationSeconds`超過、または明示的な`terminate-microvm`API呼び出し |
+| SUSPENDED | TERMINATING | `suspendedDurationSeconds`超過、または明示的な`terminate-microvm`API呼び出し、または`maximumDurationInSeconds`超過（実機確認済み、下記「実機検証」参照） |
 | TERMINATING | TERMINATED | `/terminate`フック完了、全リソース解放 |
+
+### 実機検証（2026-07-20）: SUSPENDED状態でも`maximumDurationInSeconds`超過で強制terminateされる
+
+ドキュメントの状態遷移表では「SUSPENDED → TERMINATING」のトリガーとして`suspendedDurationSeconds`超過のみが明記されており、`maximumDurationInSeconds`がSUSPENDED状態にも適用されるかは表の記載からは読み取れなかった。これを実機で検証した。
+
+検証条件（`SyncHelloWorldStack`のMicroVMイメージを使用）:
+- `run-microvm`実行時刻（`startedAt`）: `2026-07-20T12:44:31.415+09:00`
+- `idlePolicy`: `{"autoResumeEnabled":true,"maxIdleDurationSeconds":60,"suspendedDurationSeconds":28800}`（=8時間、意図的に上限値）
+- `maximumDurationInSeconds`: `28800`（=8時間）
+- 起動から約68秒後（12:45:39頃）に`SUSPENDED`へ遷移。以降、意図的に一切トラフィックを送らず放置（`get-microvm`によるポーリングはエンドポイントへのトラフィックに該当しないため自動再開の原因にはならない）。
+
+結果:
+```json
+{
+  "state": "TERMINATED",
+  "startedAt": "2026-07-20T12:44:31.415000+09:00",
+  "terminatedAt": "2026-07-20T20:44:33.984000+09:00",
+  "stateReason": "MicroVM exceeded maximum lifetime."
+}
+```
+
+`terminatedAt`は`startedAt`からほぼ正確に**8時間0分2.5秒後**であり、`stateReason`も明示的に
+「MicroVM exceeded maximum lifetime.」となっている。これは`suspendedDurationSeconds`の起点
+（SUSPENDED突入時刻、12:45:39頃）から8時間後（20:45:39頃）ではなく、`startedAt`（RunMicrovm
+実行時刻）から8時間後の時刻と一致する。
+
+**結論（実機確認済み）**: `maximumDurationInSeconds`はMicroVMの状態（RUNNING/SUSPENDED）に
+関わらず、`startedAt`を起点とした絶対的な壁時計タイマーとして機能し、SUSPENDED状態であっても
+容赦なく強制terminateする。SUSPENDED中はサスペンドによってタイマーが一時停止する、といった
+救済措置は存在しない。長時間サスペンドさせておきたいユースケース（8時間近く着信が無いことが
+想定されるワークロード等）では、`maximumDurationInSeconds`の上限（8時間）そのものが実質的な
+生存期間の上限になる点に注意が必要。8時間を超えて使い続けたい場合は、`TERMINATED`前に
+明示的に新しい`RunMicrovm`を呼び直す運用（新しいmicrovmId・エンドポイントが発行される）が
+必須になる。
 
 既存メモの「RUNNING → (idle) → SUSPENDING → SUSPENDED → (resume) → RUNNING、またはSUSPENDED → TERMINATED（`suspendedDurationSeconds`経過後）」という理解は、遷移の方向性としては**概ね正しい**。ただし正確には `SUSPENDED → TERMINATING → TERMINATED` という2段階の遷移であり、`SUSPENDED`から直接`TERMINATED`になるわけではない（`/terminate`フック実行のための`TERMINATING`状態を経由する）。
 

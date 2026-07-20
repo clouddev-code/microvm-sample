@@ -1,45 +1,38 @@
 # HANDOFF
 
 > このファイルはセッション引き継ぎ用。コンテキスト圧迫時に随時更新すること。
-> 最終更新: 2026-07-20 12:50頃 JST — **`SyncHelloWorldStack`のデプロイ〜動作確認一式は完了。**
+> 最終更新: 2026-07-20 21:05頃 JST — **`SyncHelloWorldStack`のデプロイ〜動作確認一式、および
+> 8時間suspend強制terminate検証まですべて完了。**
 > 詳細は本ファイル末尾の追記、および`microvm-sync-app/.claude/HANDOFF.md`参照。
-> **⚠️ 現在、8時間suspend後の強制terminate検証のためMicroVMを起動中（下記「進行中の検証」参照）。
-> 次回セッション開始時、まずこの確認を行うこと。**
 
-## 進行中の検証: SUSPENDED状態が8時間続いた場合に強制terminateされるか（未確認・要手動チェック）
+## 検証完了: SUSPENDED状態が8時間続くと`maximumDurationInSeconds`超過で強制terminateされる（実機確認済み）
 
 - **目的**: `suspendedDurationSeconds`（SUSPENDED状態のまま存在できる最大時間、超過で自動Terminate）
   および`maximumDurationInSeconds`（MicroVM全体の最大稼働時間、8時間）が、実際にSUSPENDED状態の
-  MicroVMを強制terminateするかを実機確認する（`research/ai-lambda-microvms-suspend-resume-lifecycle.md`
-  記載の状態遷移表は仕様上の記述であり、実機未検証だった）。
-- **起動したMicroVM**: `microvm-befc4351-4fdd-31a0-9806-2b703155b1bf`
-  （`SyncHelloWorldStack`のイメージ`sync-hello-world-app`を使用、リージョン`us-west-2`）。
-  - `startedAt`: `2026-07-20T12:44:31+09:00`（JST）
-  - `idlePolicy`: `{"autoResumeEnabled":true,"maxIdleDurationSeconds":60,"suspendedDurationSeconds":28800}`
-  - `maximumDurationInSeconds`: `28800`（8時間）
-  - 起動から約68秒後（12:45:39頃）に`SUSPENDED`への遷移を確認済み。以降は意図的に一切
-    トラフィックを送っていない（`get-microvm`での状態確認はエンドポイントへのトラフィックに
-    該当しないため、自動再開の原因にはならない）。
-- **期待される強制terminate時刻**: 起動（`startedAt`）から8時間後 ≒ **2026-07-20 20:44:31 JST頃**
-  （`maximumDurationInSeconds`が起点。`suspendedDurationSeconds`はSUSPENDED突入時点＝12:45:39から
-  8時間後の20:45:39頃が起点になるため、両者はほぼ同時刻で、通常は`maximumDurationInSeconds`の方が
-  わずかに先に発火すると想定される）。
-  余裕を見て**21:00 JST以降**に確認するのが望ましい。
-- **確認コマンド**（fish shell、`source ~/.nvm/nvm.sh; nvm use 22.22.2`は不要、AWS CLIのみでOK）:
-  ```fish
-  aws lambda-microvms get-microvm --microvm-identifier microvm-befc4351-4fdd-31a0-9806-2b703155b1bf --region us-west-2
+  MicroVMを強制terminateするかを実機確認する。
+- **検証条件**: `microvm-befc4351-4fdd-31a0-9806-2b703155b1bf`（`SyncHelloWorldStack`のイメージ
+  `sync-hello-world-app`使用、リージョン`us-west-2`）。`startedAt: 2026-07-20T12:44:31.415+09:00`、
+  `idlePolicy: {"autoResumeEnabled":true,"maxIdleDurationSeconds":60,"suspendedDurationSeconds":28800}`、
+  `maximumDurationInSeconds: 28800`。起動から約68秒後にSUSPENDED遷移、以降トラフィック無し。
+- **結果（ユーザーが21:xx JST頃に`get-microvm`で確認）**:
+  ```json
+  {
+    "state": "TERMINATED",
+    "startedAt": "2026-07-20T12:44:31.415000+09:00",
+    "terminatedAt": "2026-07-20T20:44:33.984000+09:00",
+    "stateReason": "MicroVM exceeded maximum lifetime."
+  }
   ```
-  `state`が`TERMINATING`または`TERMINATED`になっていれば検証成功（8時間後に強制terminateされる
-  ことが実機確認できたことになる）。もし21:00 JSTを過ぎてもまだ`SUSPENDED`のままであれば、
-  「SUSPENDED状態は8時間を超えても自動terminateされない」という、ドキュメントの記述と異なる
-  実機挙動である可能性が高く、追加調査が必要（`research/`配下に新規調査メモを作成すること）。
-- **なぜスケジュール未設定か**: クラウドルーティン（`schedule`スキル経由）はAWS認証情報に
-  アクセスできない独立クラウド環境で動作するため、`aws lambda-microvms get-microvm`が実行できず
-  不採用。`CronCreate`（ローカルセッション内ジョブ）は8時間セッションが継続する保証がないため
-  こちらも不採用。ユーザーの意向により、次回セッション開始時に手動で確認する方針とした。
-- **後片付け**: 検証完了（`TERMINATED`確認、または「terminateされない」という結果が判明）後は、
-  もしMicroVMがまだ生存していれば`aws lambda-microvms terminate-microvm --microvm-identifier
-  microvm-befc4351-4fdd-31a0-9806-2b703155b1bf --region us-west-2`で終了させること。
+  `terminatedAt`は`startedAt`からほぼ正確に**8時間0分2.5秒後**（`suspendedDurationSeconds`の起点＝
+  SUSPENDED突入時刻12:45:39からの8時間＝20:45:39頃ではなく、`startedAt`からの8時間と一致）。
+  `stateReason`も「MicroVM exceeded maximum lifetime.」と明示。
+- **結論**: `maximumDurationInSeconds`はRUNNING/SUSPENDEDいずれの状態でも`startedAt`起点の絶対的な
+  壁時計タイマーとして機能し、SUSPENDED中でも容赦なく強制terminateする。サスペンドによる
+  タイマー一時停止のような救済措置は無い。8時間を超えて使い続けたい場合は、`TERMINATED`前に
+  明示的に新しい`RunMicrovm`を呼び直す必要がある（新しいmicrovmId・エンドポイントが発行される）。
+  詳細は`research/ai-lambda-microvms-suspend-resume-lifecycle.md`「実機検証（2026-07-20）」節に
+  追記済み。
+- **後片付け**: `TERMINATED`済みのため追加のterminate-microvm操作は不要（課金リソース残存なし）。
 
 ## プロジェクト概要
 
